@@ -105,3 +105,89 @@ def test_chained_cache_resolution():
     assert "<name>derived_repo</name>" in derived_cache.release_package_xmls['derived_repo']
     assert "<name>bar_repo</name>" in derived_cache.release_package_xmls['bar_repo']
 
+
+def test_binary_import_override_forbidden():
+    from rosdistro.distribution_file import DistributionFile
+    base_data = {
+        'type': 'distribution',
+        'version': 3,
+        'release_platforms': {'ubuntu': ['noble']},
+        'repositories': {
+            'core_repo': {
+                'release': {
+                    'packages': ['core_pkg'],
+                    'tags': {'release': 'release/{package}/{version}'},
+                    'url': 'https://github.com/ros-gbp/core-release.git',
+                    'version': '1.0.0'
+                }
+            }
+        }
+    }
+    child_data = {
+        'type': 'distribution',
+        'version': 3,
+        'release_platforms': {'ubuntu': ['noble']},
+        'extends': [{'distro_name': 'base', 'extension_method': 'binary_import'}],
+        'repositories': {
+            'core_repo': {
+                'release': {
+                    'packages': ['core_pkg'],
+                    'tags': {'release': 'release/{package}/{version}'},
+                    'url': 'https://github.com/ros-gbp/core-release.git',
+                    'version': '2.0.0'
+                }
+            }
+        }
+    }
+    base_dist = DistributionFile('base', base_data)
+    child_dist = DistributionFile('child', child_data)
+    with pytest.raises(RuntimeError) as excinfo:
+        child_dist.merge_extends(base_dist, 'binary_import')
+    assert "violates ABI compatibility" in str(excinfo.value)
+
+
+def test_source_rebuild_override_allowed():
+    from rosdistro.distribution_file import DistributionFile
+    base_data = {
+        'type': 'distribution',
+        'version': 3,
+        'release_platforms': {'ubuntu': ['noble']},
+        'repositories': {
+            'core_repo': {
+                'source': {
+                    'type': 'git',
+                    'url': 'https://github.com/ros/core.git',
+                    'version': 'master'
+                },
+                'release': {
+                    'packages': ['core_pkg'],
+                    'tags': {'release': 'release/{package}/{version}'},
+                    'url': 'https://github.com/ros-gbp/core-release.git',
+                    'version': '1.0.0'
+                }
+            }
+        }
+    }
+    child_data = {
+        'type': 'distribution',
+        'version': 3,
+        'release_platforms': {'ubuntu': ['noble']},
+        'extends': [{'distro_name': 'base', 'extension_method': 'source_rebuild'}],
+        'repositories': {
+            'core_repo': {
+                'release': {
+                    'packages': ['core_pkg'],
+                    'tags': {'release': 'release/{package}/{version}'},
+                    'url': 'https://github.com/ros-gbp/core-release.git',
+                    'version': '2.0.0'
+                }
+            }
+        }
+    }
+    base_dist = DistributionFile('base', base_data)
+    child_dist = DistributionFile('child', child_data)
+    child_dist.merge_extends(base_dist, 'source_rebuild')
+    assert child_dist.repositories['core_repo'].release_repository.version == '2.0.0'
+    assert child_dist.repositories['core_repo'].source_repository.url == 'https://github.com/ros/core.git'
+
+
