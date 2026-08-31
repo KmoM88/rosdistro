@@ -179,7 +179,18 @@ class DistributionFile(object):
                 if getattr(current_repo, 'origin_distro', self.name) != self.name:
                     other_parent = current_repo.origin_distro
                     logger.warning("WARNING: Collision detected. Repository '%s' is defined in multiple parents ('%s' and '%s'). Using definition from '%s'." % (repo_name, other_parent, parent_dist_file.name, other_parent))
-                
+                elif extension_method == 'binary_import':
+                    raise RuntimeError("Child distribution '%s' is not allowed to override repository '%s' from base distribution '%s' under extension_method 'binary_import' (violates ABI compatibility). Overriding is only permitted under 'source_rebuild'." % (self.name, repo_name, parent_dist_file.name))
+
+                # Merge missing specifications from parent repository only for source rebuild extensions
+                if extension_method == 'source_rebuild':
+                    if not current_repo.source_repository and parent_repo.source_repository:
+                        current_repo.source_repository = parent_repo.source_repository
+                    if not current_repo.doc_repository and parent_repo.doc_repository:
+                        current_repo.doc_repository = parent_repo.doc_repository
+                    if not current_repo.release_repository and parent_repo.release_repository:
+                        current_repo.release_repository = parent_repo.release_repository
+
                 # Check for package collisions even if repository already exists
                 if parent_repo.release_repository:
                     for pkg_name in parent_repo.release_repository.package_names:
@@ -189,6 +200,8 @@ class DistributionFile(object):
                             if current_pkg_repo and getattr(current_pkg_repo, 'origin_distro', self.name) != self.name:
                                 other_parent = current_pkg_repo.origin_distro
                                 logger.warning("WARNING: Collision detected. Package '%s' is defined in multiple parents ('%s' and '%s'). Using definition from '%s'." % (pkg_name, other_parent, parent_dist_file.name, other_parent))
+                            elif extension_method == 'binary_import':
+                                raise RuntimeError("Child distribution '%s' is not allowed to override package '%s' from base distribution '%s' under extension_method 'binary_import' (violates ABI compatibility). Overriding is only permitted under 'source_rebuild'." % (self.name, pkg_name, parent_dist_file.name))
             else:
                 if extension_method == 'source_rebuild':
                     parent_repo.origin_distro = self.name
@@ -210,6 +223,8 @@ class DistributionFile(object):
                             if current_pkg_repo and getattr(current_pkg_repo, 'origin_distro', self.name) != self.name:
                                 other_parent = current_pkg_repo.origin_distro
                                 logger.warning("WARNING: Collision detected. Package '%s' is defined in multiple parents ('%s' and '%s'). Using definition from '%s'." % (pkg_name, other_parent, parent_dist_file.name, other_parent))
+                            elif extension_method == 'binary_import':
+                                raise RuntimeError("Child distribution '%s' is not allowed to override package '%s' from base distribution '%s' under extension_method 'binary_import' (violates ABI compatibility). Overriding is only permitted under 'source_rebuild'." % (self.name, pkg_name, parent_dist_file.name))
                         else:
                             self._add_package(pkg_name, parent_repo)
 
