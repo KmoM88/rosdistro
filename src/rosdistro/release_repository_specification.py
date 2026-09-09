@@ -56,8 +56,42 @@ class ReleaseRepositorySpecification(RepositorySpecification):
             # no packages means a single package
             self.package_names = [self.name]
 
+        self.binary_name = data.get('binary_name', None) if isinstance(data, dict) else None
+        self.binary_names = data.get('binary_names', {}) if isinstance(data, dict) else {}
+        self.binary_prefix_template = data.get('binary_prefix_template', None) if isinstance(data, dict) else None
+
         # for backward compatibility only
         self.release_repository = self
+
+    @property
+    def target_distro_name(self):
+        origin_distro = getattr(self, 'origin_distro', None)
+        extension_method = getattr(self, 'extension_method', None)
+        if extension_method == 'binary_import' and origin_distro:
+            return origin_distro
+        return origin_distro or getattr(self, 'distro_name', None)
+
+    def get_binary_package_name(self, pkg_name, os_name=None):
+        if hasattr(self, 'binary_names') and isinstance(self.binary_names, dict) and pkg_name in self.binary_names:
+            return self.binary_names[pkg_name]
+        if hasattr(self, 'binary_name') and self.binary_name:
+            return self.binary_name
+
+        clean_pkg = pkg_name.replace('_', '-')
+        distro_name = self.target_distro_name
+        clean_distro = distro_name.replace('_', '-') if distro_name else None
+
+        template = getattr(self, 'binary_prefix_template', None)
+        if template:
+            return template.format(distro=clean_distro or '', package=clean_pkg)
+
+        distro_type = getattr(self, 'distribution_type', 'ros2')
+        if distro_type and distro_type not in ('ros1', 'ros2'):
+            return clean_pkg
+
+        if clean_distro:
+            return 'ros-%s-%s' % (clean_distro, clean_pkg)
+        return clean_pkg
 
     def get_release_tag(self, pkg_name):
         data = {
