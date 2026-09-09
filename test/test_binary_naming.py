@@ -47,18 +47,35 @@ def test_release_repository_custom_template():
     assert repo.get_binary_package_name('my_pkg') == 'custom-jazzy-my-pkg'
 
 
-def test_release_repository_non_ros_no_op():
+def test_release_repository_empty_prefix_no_op():
     data = {
         'url': 'https://github.com/gazebosim/gz-sim-release.git',
         'version': '10.5.0-1',
         'tags': {'release': '{package}/{version}'},
-        'packages': ['gz-sim10']
+        'packages': ['gz_sim10'],
+        'binary_prefix': ''
     }
     repo = ReleaseRepositorySpecification('gz-sim', data)
     repo.origin_distro = 'jetty'
-    repo.distribution_type = 'gazebo'
     
-    assert repo.get_binary_package_name('gz-sim10') == 'gz-sim10'
+    assert repo.get_binary_package_name('gz_sim10') == 'gz-sim10'
+
+
+def test_release_repository_sequential_regex_rules():
+    data = {
+        'url': 'https://github.com/custom/repo-release.git',
+        'version': '1.0.0-1',
+        'tags': {'release': '{package}/{version}'},
+        'packages': ['my_special_package'],
+        'binary_name_rules': [
+            {'search': '_', 'replace': '-'},
+            {'search': '^(.*)$', 'replace': 'vendor-{DISTRO}-\\1'}
+        ]
+    }
+    repo = ReleaseRepositorySpecification('custom_repo', data)
+    repo.origin_distro = 'iron'
+    
+    assert repo.get_binary_package_name('my_special_package') == 'vendor-iron-my-special-package'
 
 
 def test_distribution_file_binary_naming():
@@ -79,3 +96,48 @@ def test_distribution_file_binary_naming():
     }
     dist_file = DistributionFile('lyrical', dist_data)
     assert dist_file.get_binary_package_name('turtlesim') == 'ros-lyrical-turtlesim'
+    assert dist_file.get_package_name_from_binary('ros-lyrical-turtlesim') == 'turtlesim'
+
+
+def test_distribution_file_empty_binary_prefix():
+    dist_data = {
+        'type': 'distribution',
+        'version': 3,
+        'binary_prefix': '',
+        'release_platforms': {'ubuntu': ['noble']},
+        'repositories': {
+            'gz_cmake': {
+                'release': {
+                    'url': 'https://github.com/gazebosim/gz-cmake-release.git',
+                    'version': '5.1.1-1',
+                    'tags': {'release': '{package}/{version}'},
+                    'packages': ['gz_cmake5']
+                }
+            }
+        }
+    }
+    dist_file = DistributionFile('jetty', dist_data)
+    assert dist_file.get_binary_package_name('gz_cmake5') == 'gz-cmake5'
+    assert dist_file.get_package_name_from_binary('gz-cmake5') == 'gz_cmake5'
+
+
+def test_distribution_file_reverse_lookup():
+    dist_data = {
+        'type': 'distribution',
+        'version': 3,
+        'release_platforms': {'ubuntu': ['noble']},
+        'repositories': {
+            'common_interfaces': {
+                'release': {
+                    'url': 'https://github.com/ros2-gbp/common_interfaces-release.git',
+                    'version': '5.0.0-1',
+                    'tags': {'release': '{package}/{version}'},
+                    'packages': ['std_msgs', 'sensor_msgs']
+                }
+            }
+        }
+    }
+    dist_file = DistributionFile('rolling', dist_data)
+    assert dist_file.get_package_name_from_binary('ros-rolling-std-msgs') == 'std_msgs'
+    assert dist_file.get_package_name_from_binary('ros-rolling-sensor-msgs') == 'sensor_msgs'
+    assert dist_file.get_package_name_from_binary('ros-rolling-unknown') is None
