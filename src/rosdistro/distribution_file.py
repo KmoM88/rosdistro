@@ -97,7 +97,8 @@ class DistributionFile(object):
                 self.extends.append({
                     'distro_name': ext['distro_name'],
                     'index_url': ext.get('index_url', None),
-                    'extension_method': ext['extension_method']
+                    'extension_method': ext['extension_method'],
+                    'binary_prefix_template': ext.get('binary_prefix_template', None),
                 })
 
         self.dependencies = []
@@ -159,7 +160,7 @@ class DistributionFile(object):
             data['dependencies'] = self.dependencies
         return data
 
-    def merge_extends(self, parent_dist_file, extension_method):
+    def merge_extends(self, parent_dist_file, extension_method, binary_prefix_template=None):
         # Validate target platform compatibility
         for os_name, os_code_names in self.release_platforms.items():
             if os_name not in parent_dist_file.release_platforms:
@@ -208,12 +209,16 @@ class DistributionFile(object):
                 elif not hasattr(parent_repo, 'origin_distro') or not parent_repo.origin_distro:
                     parent_repo.origin_distro = parent_dist_file.name
                 parent_repo.extension_method = extension_method
+                if binary_prefix_template:
+                    parent_repo.binary_prefix_template = binary_prefix_template
                 if parent_repo.release_repository:
                     if extension_method == 'source_rebuild':
                         parent_repo.release_repository.origin_distro = self.name
                     elif not hasattr(parent_repo.release_repository, 'origin_distro') or not parent_repo.release_repository.origin_distro:
                         parent_repo.release_repository.origin_distro = parent_repo.origin_distro
                     parent_repo.release_repository.extension_method = extension_method
+                    if binary_prefix_template:
+                        parent_repo.release_repository.binary_prefix_template = binary_prefix_template
                 self.repositories[repo_name] = parent_repo
                 if parent_repo.release_repository:
                     for pkg_name in parent_repo.release_repository.package_names:
@@ -227,6 +232,15 @@ class DistributionFile(object):
                                 raise RuntimeError("Child distribution '%s' is not allowed to override package '%s' from base distribution '%s' under extension_method 'binary_import' (violates ABI compatibility). Overriding is only permitted under 'source_rebuild'." % (self.name, pkg_name, parent_dist_file.name))
                         else:
                             self._add_package(pkg_name, parent_repo)
+
+    def get_binary_package_name(self, pkg_name, os_name=None):
+        if pkg_name in self.release_packages:
+            pkg = self.release_packages[pkg_name]
+            repo = self.repositories.get(pkg.repository_name)
+            if repo and repo.release_repository:
+                return repo.release_repository.get_binary_package_name(pkg_name, os_name=os_name)
+        clean_pkg = pkg_name.replace('_', '-')
+        return 'ros-%s-%s' % (self.name, clean_pkg)
 
 
 def create_distribution_file(dist_name, data):

@@ -139,7 +139,7 @@ def _resolve_extends(index, dist_file, visited=None):
         parent_dist_file = get_distribution_file(parent_index, parent_dist_name, _visited=visited.copy())
 
         # Merge parent_dist_file into dist_file
-        dist_file.merge_extends(parent_dist_file, ext['extension_method'])
+        dist_file.merge_extends(parent_dist_file, ext['extension_method'], binary_prefix_template=ext.get('binary_prefix_template'))
 
 
 def get_distribution_file(index, dist_name, _visited=None):
