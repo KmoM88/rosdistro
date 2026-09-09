@@ -52,6 +52,10 @@ class DistributionFile(object):
         assert int(data['version']) in [1, 2, 3], "Unable to handle '%s' format version '%d', please update rosdistro (e.g. on Ubuntu/Debian use: sudo apt-get update && sudo apt-get install --only-upgrade python-rosdistro)" % (DistributionFile._type, int(data['version']))
         self.version = int(data['version'])
 
+        self.binary_prefix = data.get('binary_prefix', None)
+        self.binary_name_rules = data.get('binary_name_rules', None)
+        self.binary_prefix_template = data.get('binary_prefix_template', None)
+
         self.repositories = {}
         self.release_packages = {}
         self.source_packages = {}
@@ -64,6 +68,12 @@ class DistributionFile(object):
                 if repo.release_repository:
                     repo.release_repository.origin_distro = self.name
                     repo.release_repository.extension_method = None
+                    if getattr(repo.release_repository, 'binary_prefix', None) is None:
+                        repo.release_repository.binary_prefix = self.binary_prefix
+                    if getattr(repo.release_repository, 'binary_name_rules', None) is None:
+                        repo.release_repository.binary_name_rules = self.binary_name_rules
+                    if getattr(repo.release_repository, 'binary_prefix_template', None) is None:
+                        repo.release_repository.binary_prefix_template = self.binary_prefix_template
                 self.repositories[repo_name] = repo
 
                 if repo.release_repository:
@@ -98,6 +108,8 @@ class DistributionFile(object):
                     'distro_name': ext['distro_name'],
                     'index_url': ext.get('index_url', None),
                     'extension_method': ext['extension_method'],
+                    'binary_prefix': ext.get('binary_prefix', None),
+                    'binary_name_rules': ext.get('binary_name_rules', None),
                     'binary_prefix_template': ext.get('binary_prefix_template', None),
                 })
 
@@ -160,12 +172,11 @@ class DistributionFile(object):
             data['dependencies'] = self.dependencies
         return data
 
-    def merge_extends(self, parent_dist_file, extension_method, binary_prefix_template=None):
-        # Validate target platform compatibility
+    def merge_extends(self, parent_dist_file, extension_method, binary_prefix_template=None, binary_prefix=None, binary_name_rules=None):
+        # Validate that release platforms of child are supported by parent
         for os_name, os_code_names in self.release_platforms.items():
             if os_name not in parent_dist_file.release_platforms:
-                for codename in os_code_names:
-                    logger.warning("WARNING: Target platform '%s:%s' specified in derived distribution is not supported by base distribution." % (os_name, codename))
+                logger.warning("WARNING: Target platform OS '%s' specified in derived distribution is not supported by base distribution." % os_name)
             else:
                 parent_codenames = parent_dist_file.release_platforms[os_name]
                 for codename in os_code_names:
@@ -209,16 +220,36 @@ class DistributionFile(object):
                 elif not hasattr(parent_repo, 'origin_distro') or not parent_repo.origin_distro:
                     parent_repo.origin_distro = parent_dist_file.name
                 parent_repo.extension_method = extension_method
+
+                effective_prefix = binary_prefix if binary_prefix is not None else getattr(parent_repo, 'binary_prefix', None)
+                if effective_prefix is None and hasattr(parent_dist_file, 'binary_prefix'):
+                    effective_prefix = parent_dist_file.binary_prefix
+                if effective_prefix is not None:
+                    parent_repo.binary_prefix = effective_prefix
+
+                effective_rules = binary_name_rules if binary_name_rules is not None else getattr(parent_repo, 'binary_name_rules', None)
+                if effective_rules is None and hasattr(parent_dist_file, 'binary_name_rules'):
+                    effective_rules = parent_dist_file.binary_name_rules
+                if effective_rules is not None:
+                    parent_repo.binary_name_rules = effective_rules
+
                 if binary_prefix_template:
                     parent_repo.binary_prefix_template = binary_prefix_template
+
                 if parent_repo.release_repository:
                     if extension_method == 'source_rebuild':
                         parent_repo.release_repository.origin_distro = self.name
                     elif not hasattr(parent_repo.release_repository, 'origin_distro') or not parent_repo.release_repository.origin_distro:
                         parent_repo.release_repository.origin_distro = parent_repo.origin_distro
                     parent_repo.release_repository.extension_method = extension_method
+
+                    if effective_prefix is not None:
+                        parent_repo.release_repository.binary_prefix = effective_prefix
+                    if effective_rules is not None:
+                        parent_repo.release_repository.binary_name_rules = effective_rules
                     if binary_prefix_template:
                         parent_repo.release_repository.binary_prefix_template = binary_prefix_template
+
                 self.repositories[repo_name] = parent_repo
                 if parent_repo.release_repository:
                     for pkg_name in parent_repo.release_repository.package_names:
@@ -239,8 +270,39 @@ class DistributionFile(object):
             repo = self.repositories.get(pkg.repository_name)
             if repo and repo.release_repository:
                 return repo.release_repository.get_binary_package_name(pkg_name, os_name=os_name)
+
         clean_pkg = pkg_name.replace('_', '-')
-        return 'ros-%s-%s' % (self.name, clean_pkg)
+        prefix = getattr(self, 'binary_prefix', None)
+        if prefix is not None:
+            clean_distro = self.name.replace('_', '-')
+            prefix = prefix.replace('{DISTRO}', clean_distro).replace('{distro}', clean_distro)
+            return '%s%s' % (prefix, clean_pkg)
+        return 'ros-%s-%s' % (self.name.replace('_', '-'), clean_pkg)
+
+    def get_package_name_from_binary(self, binary_name):
+        # 1. Deterministic reverse lookup across all release packages
+        for pkg_name in self.release_packages.keys():
+            if self.get_binary_package_name(pkg_name) == binary_name:
+                return pkg_name
+
+        # 2. Heuristic reverse pattern stripping
+        prefix = getattr(self, 'binary_prefix', None)
+        if prefix is None:
+            prefix = 'ros-%s-' % self.name.replace('_', '-')
+        clean_distro = self.name.replace('_', '-')
+        prefix = prefix.replace('{DISTRO}', clean_distro).replace('{distro}', clean_distro)
+
+        if prefix and binary_name.startswith(prefix):
+            candidate = binary_name[len(prefix):]
+            if candidate in self.release_packages:
+                return candidate
+            candidate_underscore = candidate.replace('-', '_')
+            if candidate_underscore in self.release_packages:
+                return candidate_underscore
+
+        if binary_name in self.release_packages:
+            return binary_name
+        return None
 
 
 def create_distribution_file(dist_name, data):
