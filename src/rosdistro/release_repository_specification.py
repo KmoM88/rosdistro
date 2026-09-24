@@ -31,7 +31,34 @@
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
+import io
+import re
+
 from .repository_specification import RepositorySpecification
+
+
+def _expand_empy_template(template_str, context):
+    try:
+        import em
+    except ImportError:
+        # Fallback if em is not installed in current environment
+        result = template_str
+        for k, v in context.items():
+            if isinstance(v, str):
+                result = result.replace('@(%s)' % k, v).replace('{%s}' % k, v)
+        return result
+
+    output = io.StringIO()
+    try:
+        # EmPy Interpreter evaluation
+        interpreter = em.Interpreter(output=output, globals=dict(context))
+        interpreter.string(template_str)
+        interpreter.shutdown()
+        return output.getvalue().strip()
+    except Exception:
+        if hasattr(em, 'expand'):
+            return em.expand(template_str, **context).strip()
+        raise
 
 
 class ReleaseRepositorySpecification(RepositorySpecification):
@@ -56,8 +83,65 @@ class ReleaseRepositorySpecification(RepositorySpecification):
             # no packages means a single package
             self.package_names = [self.name]
 
+        self.binary_name = data.get('binary_name', None) if isinstance(data, dict) else None
+        self.binary_names = data.get('binary_names', {}) if isinstance(data, dict) else {}
+        self.binary_template = data.get('binary_template', None) if isinstance(data, dict) else None
+        self.binary_prefix = data.get('binary_prefix', None) if isinstance(data, dict) else None
+
         # for backward compatibility only
         self.release_repository = self
+
+    @property
+    def target_distro_name(self):
+        origin_distro = getattr(self, 'origin_distro', None)
+        extension_method = getattr(self, 'extension_method', None)
+        if extension_method == 'binary_import' and origin_distro:
+            return origin_distro
+        return origin_distro or getattr(self, 'distro_name', None)
+
+    def get_binary_package_name(self, pkg_name, os_name=None):
+        if hasattr(self, 'binary_names') and isinstance(self.binary_names, dict) and pkg_name in self.binary_names:
+            return self.binary_names[pkg_name]
+        if hasattr(self, 'binary_name') and self.binary_name:
+            return self.binary_name
+
+        distro_name = self.target_distro_name or ''
+        clean_distro = distro_name.replace('_', '-')
+        clean_pkg = pkg_name.replace('_', '-')
+        raw_pkg = pkg_name
+        parts = [p for p in re.split(r'[-_]', pkg_name) if p]
+        prefix_part = parts[0] if len(parts) > 1 else ''
+        suffix_part = '-'.join(parts[1:]) if len(parts) > 1 else clean_pkg
+        origin_distro = getattr(self, 'origin_distro', None) or distro_name
+        clean_origin = origin_distro.replace('_', '-')
+
+        context = {
+            'package': raw_pkg,
+            'package_hyphens': clean_pkg,
+            'package_underscores': pkg_name.replace('-', '_'),
+            'package_parts': parts,
+            'package_prefix': prefix_part,
+            'package_suffix': suffix_part,
+            'distro': clean_distro,
+            'distro_raw': distro_name,
+            'origin_distro': clean_origin,
+            'origin_distro_raw': origin_distro,
+            'DISTRO': clean_distro,
+            'PACKAGE': clean_pkg,
+            'ORIGIN_DISTRO': clean_origin,
+        }
+
+        template = getattr(self, 'binary_template', None)
+        if template is None:
+            prefix = getattr(self, 'binary_prefix', None)
+            if prefix is not None:
+                template = "%s@(package_hyphens)" % prefix
+            elif clean_distro:
+                template = "ros-@(distro)-@(package_hyphens)"
+            else:
+                template = "@(package_hyphens)"
+
+        return _expand_empy_template(template, context)
 
     def get_release_tag(self, pkg_name):
         data = {

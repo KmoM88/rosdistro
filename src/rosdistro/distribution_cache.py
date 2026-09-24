@@ -78,7 +78,12 @@ class DistributionCache(object):
                 try:
                     parent_cache = get_distribution_cache(index, parent_name)
                     # Merge parent distribution file
-                    self.distribution_file.merge_extends(parent_cache.distribution_file, ext['extension_method'])
+                    self.distribution_file.merge_extends(
+                        parent_cache.distribution_file,
+                        ext['extension_method'],
+                        binary_template=ext.get('binary_template'),
+                        binary_prefix=ext.get('binary_prefix')
+                    )
                     # Merge package XMLs
                     for pkg_name, xml_str in parent_cache.release_package_xmls.items():
                         if pkg_name not in self.release_package_xmls:
