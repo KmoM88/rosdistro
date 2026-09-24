@@ -24,6 +24,6 @@ def test_unsupported_distribution_version():
         DistributionFile('foo', data)
     assert excinfo.value.file_type == 'distribution'
     assert excinfo.value.version == 99
-    assert excinfo.value.supported_versions == [1, 2]
+    assert excinfo.value.supported_versions == [1, 2, 3]
     assert excinfo.value.file_name == 'foo'
     assert "Unable to handle 'distribution' format version '99' for 'foo'" in str(excinfo.value)
