@@ -35,6 +35,8 @@ from .package import Package
 from .repository import Repository
 
 import logging
+import logging
+import re
 logger = logging.getLogger('rosdistro')
 
 
@@ -54,6 +56,9 @@ class DistributionFile(object):
             raise FormatVersionError(DistributionFile._type, data['version'], [1, 2, 3], self.name)
         self.version = int(data['version'])
 
+        self.binary_template = data.get('binary_template', None) if isinstance(data, dict) else None
+        self.binary_prefix = data.get('binary_prefix', None) if isinstance(data, dict) else None
+
         self.repositories = {}
         self.release_packages = {}
         self.source_packages = {}
@@ -66,6 +71,10 @@ class DistributionFile(object):
                 if repo.release_repository:
                     repo.release_repository.origin_distro = self.name
                     repo.release_repository.extension_method = None
+                    if not getattr(repo.release_repository, 'binary_template', None) and self.binary_template:
+                        repo.release_repository.binary_template = self.binary_template
+                    if not getattr(repo.release_repository, 'binary_prefix', None) and self.binary_prefix:
+                        repo.release_repository.binary_prefix = self.binary_prefix
                 self.repositories[repo_name] = repo
 
                 if repo.release_repository:
@@ -99,7 +108,9 @@ class DistributionFile(object):
                 self.extends.append({
                     'distro_name': ext['distro_name'],
                     'index_url': ext.get('index_url', None),
-                    'extension_method': ext['extension_method']
+                    'extension_method': ext['extension_method'],
+                    'binary_template': ext.get('binary_template', None),
+                    'binary_prefix': ext.get('binary_prefix', None),
                 })
 
         self.dependencies = []
@@ -161,7 +172,7 @@ class DistributionFile(object):
             data['dependencies'] = self.dependencies
         return data
 
-    def merge_extends(self, parent_dist_file, extension_method):
+    def merge_extends(self, parent_dist_file, extension_method, binary_template=None, binary_prefix=None):
         # Validate target platform compatibility
         for os_name, os_code_names in self.release_platforms.items():
             if os_name not in parent_dist_file.release_platforms:
@@ -210,12 +221,31 @@ class DistributionFile(object):
                 elif not hasattr(parent_repo, 'origin_distro') or not parent_repo.origin_distro:
                     parent_repo.origin_distro = parent_dist_file.name
                 parent_repo.extension_method = extension_method
+
+                effective_template = binary_template if binary_template is not None else getattr(parent_repo, 'binary_template', None)
+                if effective_template is None and hasattr(parent_dist_file, 'binary_template'):
+                    effective_template = parent_dist_file.binary_template
+                if effective_template is not None:
+                    parent_repo.binary_template = effective_template
+
+                effective_prefix = binary_prefix if binary_prefix is not None else getattr(parent_repo, 'binary_prefix', None)
+                if effective_prefix is None and hasattr(parent_dist_file, 'binary_prefix'):
+                    effective_prefix = parent_dist_file.binary_prefix
+                if effective_prefix is not None:
+                    parent_repo.binary_prefix = effective_prefix
+
                 if parent_repo.release_repository:
                     if extension_method == 'source_rebuild':
                         parent_repo.release_repository.origin_distro = self.name
                     elif not hasattr(parent_repo.release_repository, 'origin_distro') or not parent_repo.release_repository.origin_distro:
                         parent_repo.release_repository.origin_distro = parent_repo.origin_distro
                     parent_repo.release_repository.extension_method = extension_method
+
+                    if effective_template is not None:
+                        parent_repo.release_repository.binary_template = effective_template
+                    if effective_prefix is not None:
+                        parent_repo.release_repository.binary_prefix = effective_prefix
+
                 self.repositories[repo_name] = parent_repo
                 if parent_repo.release_repository:
                     for pkg_name in parent_repo.release_repository.package_names:
@@ -230,6 +260,59 @@ class DistributionFile(object):
                         else:
                             self._add_package(pkg_name, parent_repo)
 
+    def get_binary_package_name(self, pkg_name, os_name=None):
+        if pkg_name in self.release_packages:
+            pkg = self.release_packages[pkg_name]
+            repo = self.repositories.get(pkg.repository_name)
+            if repo and repo.release_repository:
+                return repo.release_repository.get_binary_package_name(pkg_name, os_name=os_name)
+
+        clean_pkg = pkg_name.replace('_', '-')
+        clean_distro = self.name.replace('_', '-')
+        if hasattr(self, 'binary_template') and self.binary_template:
+            from .release_repository_specification import _expand_jinja_template
+            parts = [p for p in re.split(r'[-_]', pkg_name) if p]
+            context = {
+                'package': pkg_name,
+                'package_hyphens': clean_pkg,
+                'package_underscores': pkg_name.replace('-', '_'),
+                'package_parts': parts,
+                'package_prefix': parts[0] if len(parts) > 1 else '',
+                'package_suffix': '-'.join(parts[1:]) if len(parts) > 1 else clean_pkg,
+                'distro': clean_distro,
+                'distro_raw': self.name,
+                'origin_distro': clean_distro,
+                'origin_distro_raw': self.name,
+                'DISTRO': clean_distro,
+                'PACKAGE': clean_pkg,
+                'ORIGIN_DISTRO': clean_distro,
+            }
+            return _expand_jinja_template(self.binary_template, context)
+
+        prefix = getattr(self, 'binary_prefix', None)
+        if prefix is not None:
+            return '%s%s' % (prefix, clean_pkg)
+        return 'ros-%s-%s' % (clean_distro, clean_pkg)
+
+    def get_package_name_from_binary(self, binary_name):
+        for pkg_name in self.release_packages.keys():
+            if self.get_binary_package_name(pkg_name) == binary_name:
+                return pkg_name
+
+        clean_distro = self.name.replace('_', '-')
+        prefix = 'ros-%s-' % clean_distro
+        if binary_name.startswith(prefix):
+            candidate = binary_name[len(prefix):]
+            if candidate in self.release_packages:
+                return candidate
+            candidate_underscore = candidate.replace('-', '_')
+            if candidate_underscore in self.release_packages:
+                return candidate_underscore
+
+        if binary_name in self.release_packages:
+            return binary_name
+        return None
+
 
 def create_distribution_file(dist_name, data):
     if not isinstance(data, list):
@@ -242,3 +325,4 @@ def create_distribution_file(dist_name, data):
         else:
             combined_dist_file.merge(dist_file)
     return combined_dist_file
+
